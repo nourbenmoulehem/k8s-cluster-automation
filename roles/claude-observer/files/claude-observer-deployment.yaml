@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: claude-observer
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: claude-api-key
+  namespace: claude-observer
+type: Opaque
+stringData:
+  api-key: "${ANTHROPIC_API_KEY}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claude-observer-config
+  namespace: claude-observer
+data:
+  PROMETHEUS_URL: "http://prometheus.monitoring.svc.cluster.local:9090"
+  CHECK_INTERVAL: "300"  # 5 minutes
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude-observer
+  namespace: claude-observer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: claude-observer
+  template:
+    metadata:
+      labels:
+        app: claude-observer
+    spec:
+      containers:
+      - name: observer
+        image: python:3.11-slim
+        command:
+        - /bin/bash
+        - -c
+        - |
+          pip install --no-cache-dir anthropic requests &&
+          python /app/claude-observer.py
+        env:
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: claude-api-key
+              key: api-key
+        - name: PROMETHEUS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: claude-observer-config
+              key: PROMETHEUS_URL
+        - name: CHECK_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: claude-observer-config
+              key: CHECK_INTERVAL
+        volumeMounts:
+        - name: app
+          mountPath: /app
+        - name: reports
+          mountPath: /tmp
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: app
+        configMap:
+          name: claude-observer-app
+      - name: reports
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claude-observer-app
+  namespace: claude-observer
+data:
+  claude-observer.py: |
+    # (The Python script goes here - will be populated by Ansible)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: claude-observer
+  namespace: claude-observer
+spec:
+  selector:
+    app: claude-observer
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP

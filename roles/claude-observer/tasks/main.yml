@@ -1,0 +1,78 @@
+---
+# ============================================
+# Claude Observer - AI-Powered K8s Monitoring
+# ============================================
+
+- name: Create claude-observer namespace
+  command: kubectl create namespace claude-observer --dry-run=client -o yaml | kubectl apply -f -
+  become: no
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  register: namespace_created
+  changed_when: "'created' in namespace_created.stdout or 'configured' in namespace_created.stdout"
+
+- name: Create temporary directory for Claude Observer manifests
+  file:
+    path: /tmp/claude-observer
+    state: directory
+    mode: '0755'
+  become: no
+
+- name: Copy Claude Observer Python script
+  copy:
+    src: claude-observer.py
+    dest: /tmp/claude-observer/claude-observer.py
+    mode: '0644'
+  become: no
+
+- name: Create ConfigMap with Python script
+  shell: |
+    kubectl create configmap claude-observer-app \
+      --from-file=claude-observer.py=/tmp/claude-observer/claude-observer.py \
+      -n claude-observer \
+      --dry-run=client -o yaml | kubectl apply -f -
+  become: no
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+
+- name: Copy Claude Observer deployment manifest
+  template:
+    src: claude-observer-deployment.yaml.j2
+    dest: /tmp/claude-observer/deployment.yaml
+    mode: '0644'
+  become: no
+
+- name: Deploy Claude Observer
+  command: kubectl apply -f /tmp/claude-observer/deployment.yaml
+  become: no
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  register: observer_deployed
+  changed_when: "'created' in observer_deployed.stdout or 'configured' in observer_deployed.stdout"
+
+- name: Wait for Claude Observer to be ready
+  command: kubectl wait --for=condition=Ready pod -l app=claude-observer -n claude-observer --timeout=60s
+  become: no
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  retries: 3
+  delay: 10
+  register: observer_ready
+  until: observer_ready.rc == 0
+  ignore_errors: yes
+
+- name: Display Claude Observer status
+  debug:
+    msg:
+      - "============================================"
+      - "✓ Claude Observer deployed!"
+      - "============================================"
+      - "View logs: kubectl logs -n claude-observer -l app=claude-observer -f"
+      - "View report: kubectl exec -n claude-observer -l app=claude-observer -- cat /tmp/claude-observer-latest.txt"
+  when: observer_ready.rc == 0
+
+- name: Cleanup temporary directory
+  file:
+    path: /tmp/claude-observer
+    state: absent
+  become: no

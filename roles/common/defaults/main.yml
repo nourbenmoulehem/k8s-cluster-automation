@@ -1,0 +1,14 @@
+---
+# defaults file for common
+
+# packages to install on all nodes
+
+common_packages:
+  - curl
+  - wget
+  - git
+  - vim
+  - htop
+  - net-tools
+
+auto_updtaes: false

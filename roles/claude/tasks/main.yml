@@ -1,0 +1,57 @@
+---
+# tasks file for claude
+- name: Install Node.js and npm (required for Claude Code)
+  apt:
+    name:
+      - nodejs
+      - npm
+    state: present
+    update_cache: yes
+  become: yes
+
+- name: Install Claude Code CLI globally
+  npm:
+    name: "@anthropic-ai/claude-code"
+    global: yes
+    state: present
+  become: yes
+
+- name: Create Claude config directory
+  file:
+    path: "/home/{{ claude_user }}/.claude"
+    state: directory
+    owner: "{{ claude_user }}"
+    group: "{{ claude_user }}"
+    mode: '0700'
+
+- name: Configure Claude Code with API key
+  copy:
+    content: |
+      {
+        "apiKey": "{{ claude_api_key }}"
+      }
+    dest: "/home/{{ claude_user }}/.claude/config.json"
+    owner: "{{ claude_user }}"
+    group: "{{ claude_user }}"
+    mode: '0600'
+  when: claude_api_key != ""
+
+- name: Create kubectl alias helper script
+  copy:
+    content: |
+      #!/bin/bash
+      # Helper to use Claude for K8s debugging
+      export KUBECONFIG=/home/ubuntu/.kube/config
+      claude "$@"
+    dest: "/usr/local/bin/claude-k8s"
+    mode: '0755'
+  become: yes
+
+- name: Add Claude to PATH and create aliases
+  blockinfile:
+    path: "/home/{{ claude_user }}/.bashrc"
+    block: |
+      # Claude Code integration
+      alias cdebug='claude'
+      alias k8s-help='claude "help me debug my kubernetes cluster"'
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - Claude Code"

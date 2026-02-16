@@ -1,0 +1,202 @@
+heat_template_version: 2021-04-16
+
+description: >
+  K8s cluster
+  Master: compute-test (Legion) - 4GB RAM, 40GB disk
+  Workers: compute-nour (Dell) - 2GB RAM, 20GB disk each
+
+parameters:
+  key_name:
+    type: string
+    default: mykey
+
+  image:
+    type: string
+    default: ubuntu-24.04-server
+
+  network:
+    type: string
+    default: selfservice
+
+  external_network:
+    type: string
+    default: provider
+
+resources:
+
+  # ===============================
+  # Security Group
+  # ===============================
+  k8s_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: k8s-cluster-sg
+      description: Security group for K8s cluster
+      rules:
+        # SSH
+        - protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+          remote_ip_prefix: 0.0.0.0/0
+
+        # Kubernetes API
+        - protocol: tcp
+          port_range_min: 6443
+          port_range_max: 6443
+          remote_ip_prefix: 0.0.0.0/0
+
+        # etcd
+        - protocol: tcp
+          port_range_min: 2379
+          port_range_max: 2380
+          remote_ip_prefix: 0.0.0.0/0
+
+        # kubelet
+        - protocol: tcp
+          port_range_min: 10250
+          port_range_max: 10250
+          remote_ip_prefix: 0.0.0.0/0
+
+        # kube-scheduler
+        - protocol: tcp
+          port_range_min: 10259
+          port_range_max: 10259
+          remote_ip_prefix: 0.0.0.0/0
+
+        # kube-controller-manager
+        - protocol: tcp
+          port_range_min: 10257
+          port_range_max: 10257
+          remote_ip_prefix: 0.0.0.0/0
+
+        # NodePort
+        - protocol: tcp
+          port_range_min: 30000
+          port_range_max: 32767
+          remote_ip_prefix: 0.0.0.0/0
+
+        # Calico BGP
+        - protocol: tcp
+          port_range_min: 179
+          port_range_max: 179
+          remote_ip_prefix: 0.0.0.0/0
+
+        # Calico VXLAN
+        - protocol: udp
+          port_range_min: 4789
+          port_range_max: 4789
+          remote_ip_prefix: 0.0.0.0/0
+
+        # ICMP
+        - protocol: icmp
+          remote_ip_prefix: 0.0.0.0/0
+
+  # ===============================
+  # MASTER
+  # ===============================
+  master_port:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: network }
+      security_groups:
+        - { get_resource: k8s_security_group }
+
+  master_instance:
+    type: OS::Nova::Server
+    properties:
+      name: k8s-master
+      image: { get_param: image }
+      flavor: k8s-master
+      key_name: { get_param: key_name }
+      availability_zone: compute-nour
+      networks:
+        - port: { get_resource: master_port }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        echo "ubuntu:ubuntu" | chpasswd
+        sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+        systemctl restart ssh
+
+  master_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: external_network }
+      port_id: { get_resource: master_port }
+
+  # ===============================
+  # WORKER 1
+  # ===============================
+  worker1_port:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: network }
+      security_groups:
+        - { get_resource: k8s_security_group }
+
+  worker1_instance:
+    type: OS::Nova::Server
+    properties:
+      name: k8s-worker1
+      image: { get_param: image }
+      flavor: ubuntu-small
+      key_name: { get_param: key_name }
+      availability_zone: compute-test
+      networks:
+        - port: { get_resource: worker1_port }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        echo "ubuntu:ubuntu" | chpasswd
+        sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+        systemctl restart ssh
+
+  worker1_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: external_network }
+      port_id: { get_resource: worker1_port }
+
+  # ===============================
+  # WORKER 2
+  # ===============================
+  worker2_port:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: network }
+      security_groups:
+        - { get_resource: k8s_security_group }
+
+  worker2_instance:
+    type: OS::Nova::Server
+    properties:
+      name: k8s-worker2
+      image: { get_param: image }
+      flavor: ubuntu-small
+      key_name: { get_param: key_name }
+      availability_zone: compute-nour
+      networks:
+        - port: { get_resource: worker2_port }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        echo "ubuntu:ubuntu" | chpasswd
+        sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+        systemctl restart ssh
+
+  worker2_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: external_network }
+      port_id: { get_resource: worker2_port }
+
+outputs:
+  master_floating_ip:
+    value: { get_attr: [master_floating_ip, floating_ip_address] }
+
+  worker1_floating_ip:
+    value: { get_attr: [worker1_floating_ip, floating_ip_address] }
+
+  worker2_floating_ip:
+    value: { get_attr: [worker2_floating_ip, floating_ip_address] }
+

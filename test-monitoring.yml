@@ -1,0 +1,10 @@
+---
+- name: Test k8s master
+  hosts: master
+  become: yes
+  roles:
+    - common
+    - container-runtime
+    - kubernetes
+    - k8s-master
+    - monitoring

@@ -1,0 +1,65 @@
+---
+# tasks file for container-runtime
+# Installs and configures containerd
+
+
+# TASK 1: Install containerd
+- name: Install containerd package
+  apt:
+    name: containerd
+    state: present
+    update_cache: yes
+
+# Task 2: create config directory
+
+- name: create containerd config directory
+  file:
+    path: /etc/containerd
+    state: directory
+    mode: '0755'
+
+# task 3: generate default config => idempotence
+- name: Generate default containerd configuration
+  shell: containerd config default > /etc/containerd/config.toml
+  args:
+    creates: /etc/containerd/config.toml
+
+# task 4: Configure SystemdCgroup
+- name: Enable SystemdCgroup in containerd config
+  lineinfile:
+    path: /etc/containerd/config.toml
+    regexp: '^\s*SystemdCgroup = false'
+    line: '            SystemdCgroup = true'
+    state: present
+
+# TASK 5: Restart containerd service
+- name: Restart and enable containerd service
+  systemd:
+    name: containerd
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+
+# TASK 6: Verify installation
+- name: Verify containerd is running
+  command: systemctl is-active containerd
+  register: containerd_status
+  changed_when: false
+  failed_when: containerd_status.stdout != "active"
+
+
+# TASK 7: Display success message
+- name: Display containerd version
+  command: containerd --version
+  register: version_output
+  changed_when: false
+
+- name: Show containerd info
+  debug:
+    msg: "Containerd installed: {{ version_output.stdout }}"
+
+
+
+
+
+

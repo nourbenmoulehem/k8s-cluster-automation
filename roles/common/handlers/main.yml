@@ -1,0 +1,6 @@
+---
+# Handlers are tasks that run when notified
+# Example: restart services only if config changes
+
+- name: reload sysctl
+  command: sysctl --system

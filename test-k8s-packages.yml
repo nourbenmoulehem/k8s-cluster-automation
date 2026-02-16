@@ -1,0 +1,6 @@
+---
+- name: Test k8s packages
+  hosts: all
+  become: yes
+  roles:
+    - kubernetes

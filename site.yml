@@ -1,0 +1,63 @@
+---
+# ============================================
+# Complete Kubernetes Cluster Deployment
+# ============================================
+
+# --------------------------------------------------
+# PLAY 1: Prepare All Nodes
+# --------------------------------------------------
+
+- name: Prepare all nodes for Kubernetes
+  hosts: all
+  become: yes
+  roles:
+    - common
+    - container-runtime
+    - kubernetes
+
+# --------------------------------------------------
+# PLAY 2: Initialize Master Node
+# --------------------------------------------------
+
+- name: Initialize Kubernetes master
+  hosts: k8s_master
+  become: yes
+  roles:
+    - k8s-master
+    - claude
+
+# --------------------------------------------------
+# PLAY 3: Join Worker Nodes
+# --------------------------------------------------
+
+- name: Join worker nodes to cluster
+  hosts: k8s_workers
+  become: yes
+  roles:
+    - k8s-worker
+
+# --------------------------------------------------
+# PLAY 4: Deploy Monitoring Stack
+# --------------------------------------------------
+
+- name: Deploy monitoring stack
+  hosts: k8s_master
+  become: yes
+  roles:
+    - monitoring
+
+# PLAY 5: deploy nestie app
+- name: Deploy Nestie app
+  hosts: k8s_master
+  become: yes
+  roles:
+    - nestie-app
+
+
+- name: Deploy Claude Observer
+  hosts: k8s_master
+  become: yes
+  roles:
+    - claude-observer
+  tags:
+    - claude-observer

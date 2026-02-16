@@ -1,0 +1,9 @@
+---
+- name: Test k8s master
+  hosts: k8s_workers
+  become: yes
+  roles:
+    - common
+    - container-runtime
+    - kubernetes
+    - k8s-worker

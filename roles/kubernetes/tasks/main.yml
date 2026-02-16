@@ -1,0 +1,121 @@
+---
+# tasks file for kubernetes
+
+
+# install prerequisite
+- name: Install required packages for K8s repository
+  apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+    state: present
+    update_cache: yes
+  tags: [k8s, packages]
+
+
+# TASK 2: Create keyrings directory
+- name: Create apt keyrings directory
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+  tags: [k8s, setup]
+
+# TASK 3: Add Kubernetes GPG key
+- name: Download and add Kubernetes GPG key
+  shell: |
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | \
+    gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  tags: [k8s, setup]
+
+# TASK 4: Add Kubernetes apt repository
+- name: Add Kubernetes apt repository
+  apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /"
+    state: present
+    filename: kubernetes
+  tags: [k8s, setup]
+
+# TASK 5: Install Kubernetes packages
+- name: Install kubelet, kubeadm, and kubectl
+  apt:
+    name:
+      - kubelet
+      - kubeadm
+      - kubectl
+    state: present
+    update_cache: yes
+  tags: [k8s, install]
+
+# TASK 6: Hold Kubernetes packages
+- name: Hold Kubernetes packages at current version
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
+  tags: [k8s, install]
+
+
+# TASK 7: Configure kubelet extra args (optional but good)
+- name: Create kubelet configuration directory
+  file:
+    path: /etc/default
+    state: directory
+    mode: '0755'
+  tags: [k8s, config]
+
+- name: Set kubelet extra args
+  lineinfile:
+    path: /etc/default/kubelet
+    line: 'KUBELET_EXTRA_ARGS=--cgroup-driver=systemd'
+    create: yes
+    state: present
+  notify: restart kubelet
+  tags: [k8s, config]
+
+# TASK 8: Enable kubelet service
+- name: Enable kubelet service
+  systemd:
+    name: kubelet
+    enabled: yes
+    daemon_reload: yes
+  tags: [k8s, service]
+
+
+# TASK 9: Verify installations
+- name: Check kubeadm version
+  command: kubeadm version -o short
+  register: kubeadm_version
+  changed_when: false
+  tags: [k8s, verify]
+
+- name: Check kubelet version
+  command: kubelet --version
+  register: kubelet_version
+  changed_when: false
+  tags: [k8s, verify]
+
+- name: Display installed versions
+  debug:
+    msg:
+      - "✓ Kubeadm: {{ kubeadm_version.stdout }}"
+      - "✓ Kubelet: {{ kubelet_version.stdout }}"
+  tags: [k8s, verify]
+
+
+
+
+
+
+
+
+
+
+

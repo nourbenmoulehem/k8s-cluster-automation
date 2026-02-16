@@ -1,0 +1,139 @@
+---
+# ============================================
+# Nestie Application Deployment Role
+# ============================================
+
+- name: Create temporary directory for Nestie manifests
+  file:
+    path: /tmp/nestie
+    state: directory
+    mode: '0755'
+  tags: [nestie, deploy]
+
+- name: Copy MySQL manifest to master
+  copy:
+    src: mysql.yaml
+    dest: /tmp/nestie/mysql.yaml
+    mode: '0644'
+  tags: [nestie, deploy]
+
+- name: Copy Backend manifest to master
+  copy:
+    src: backend.yaml
+    dest: /tmp/nestie/backend.yaml
+    mode: '0644'
+  tags: [nestie, deploy]
+
+- name: Copy Frontend manifest to master
+  copy:
+    src: frontend.yaml
+    dest: /tmp/nestie/frontend.yaml
+    mode: '0644'
+  tags: [nestie, deploy]
+
+# --------------------------------------------------
+# DEPLOYMENT ORDER
+# --------------------------------------------------
+
+- name: Deploy MySQL
+  become: no
+  command: kubectl apply -f /tmp/nestie/mysql.yaml
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  tags: [nestie, deploy, mysql]
+
+- name: Wait for MySQL to be ready
+  become: no
+  command: kubectl wait --for=condition=Ready pod -l app=mysql --timeout=180s
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  retries: 3
+  delay: 10
+  register: mysql_ready
+  until: mysql_ready.rc == 0
+  ignore_errors: yes
+  tags: [nestie, deploy, mysql]
+
+- name: Deploy Backend
+  become: no
+  command: kubectl apply -f /tmp/nestie/backend.yaml
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  tags: [nestie, deploy, backend]
+
+- name: Wait for Backend to be ready
+  become: no
+  command: kubectl wait --for=condition=Ready pod -l app=backend --timeout=180s
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  retries: 3
+  delay: 10
+  register: backend_ready
+  until: backend_ready.rc == 0
+  ignore_errors: yes
+  tags: [nestie, deploy, backend]
+
+- name: Deploy Frontend
+  become: no
+  command: kubectl apply -f /tmp/nestie/frontend.yaml
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  register: frontend_apply  # ← ADD THIS!
+  changed_when: "'created' in frontend_apply.stdout or 'configured' in frontend_apply.stdout"
+  tags: [nestie, deploy, frontend]
+
+- name: Force frontend to pull latest image
+  become: no
+  command: kubectl rollout restart deployment/frontend
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  when: 
+    - frontend_apply.stdout is defined
+    - "'unchanged' in frontend_apply.stdout"
+  tags: [nestie, deploy, frontend]
+
+- name: Wait for Frontend rollout to complete
+  become: no
+  command: kubectl rollout status deployment/frontend --timeout=180s
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  changed_when: false
+  ignore_errors: yes
+  tags: [nestie, deploy, frontend]
+# --------------------------------------------------
+# VERIFICATION
+# --------------------------------------------------
+
+- name: Get all pods
+  become: no
+  command: kubectl get pods -o wide
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  register: all_pods
+  changed_when: false
+  tags: [nestie, verify]
+
+- name: Get all services
+  become: no
+  command: kubectl get svc
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  register: all_services
+  changed_when: false
+  tags: [nestie, verify]
+
+- name: Display deployment status
+  debug:
+    msg:
+      - "============================================"
+      - "✓ Nestie Application Deployed!"
+      - "============================================"
+      - ""
+      - "Pods:"
+      - "{{ all_pods.stdout }}"
+      - ""
+      - "Services:"
+      - "{{ all_services.stdout }}"
+      - ""
+      - "Access Nestie at: http://{{ ansible_host }}:30080"
+  tags: [nestie, verify]

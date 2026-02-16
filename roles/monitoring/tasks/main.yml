@@ -1,0 +1,124 @@
+---
+# ============================================
+# Monitoring Role - Deploy Prometheus + Grafana
+# ============================================
+
+- name: Check if Helm is already installed
+  command: which helm
+  register: helm_check
+  changed_when: false
+  failed_when: false
+  tags: [monitoring, helm]
+
+- name: Download Helm installation script
+  get_url:
+    url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+    dest: /tmp/get-helm-3.sh
+    mode: '0755'
+  when: helm_check.rc != 0
+  tags: [monitoring, helm]
+
+- name: Install Helm
+  command: bash /tmp/get-helm-3.sh
+  when: helm_check.rc != 0
+  tags: [monitoring, helm]
+
+- name: Verify Helm is installed
+  command: helm version --short
+  register: helm_version
+  changed_when: false
+  tags: [monitoring, helm]
+
+- name: Display Helm version
+  debug:
+    msg: "✓ Helm installed: {{ helm_version.stdout }}"
+  tags: [monitoring, helm]
+
+- name: Add prometheus-community Helm repository
+  become: no
+  command: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+  register: helm_repo_add
+  changed_when: "'has been added' in helm_repo_add.stdout"
+  failed_when: 
+    - helm_repo_add.rc != 0
+    - "'already exists' not in helm_repo_add.stderr"
+  tags: [monitoring, helm]
+
+- name: Update Helm repositories
+  become: no
+  command: helm repo update
+  changed_when: false
+  tags: [monitoring, helm]
+
+- name: Check if prometheus stack is already installed
+  become: no
+  command: helm list -n monitoring
+  register: helm_list
+  changed_when: false
+  failed_when: false
+  tags: [monitoring, deploy]
+
+- name: Create monitoring namespace
+  become: no
+  command: kubectl create namespace monitoring
+  when: "'prometheus' not in helm_list.stdout"
+  register: ns_create
+  failed_when:
+    - ns_create.rc != 0
+    - "'already exists' not in ns_create.stderr"
+  tags: [monitoring, deploy]
+
+- name: Install kube-prometheus-stack
+  become: no
+  command: >
+    helm install prometheus prometheus-community/kube-prometheus-stack
+    --namespace monitoring
+    --set prometheus.service.type=NodePort
+    --set prometheus.service.nodePort=31000
+    --set grafana.service.type=NodePort
+    --set grafana.service.nodePort=32000
+    --set grafana.adminPassword=admin123
+  when: "'prometheus' not in helm_list.stdout"
+  register: helm_install
+  tags: [monitoring, deploy]
+
+- name: Wait for Prometheus pods to be ready
+  become: no
+  shell: kubectl wait --for=condition=Ready pods --all -n monitoring --timeout=600s
+  when: "'prometheus' not in helm_list.stdout"
+  retries: 3
+  delay: 30
+  register: pods_ready
+  until: pods_ready.rc == 0
+  ignore_errors: yes
+  tags: [monitoring, deploy]
+
+- name: Get master node IP
+  set_fact:
+    master_ip: "{{ ansible_host }}"
+  tags: [monitoring, info]
+
+- name: Display monitoring access information
+  debug:
+    msg:
+      - "============================================"
+      - "✓ Monitoring Stack Deployed Successfully!"
+      - "============================================"
+      - ""
+      - "Prometheus:"
+      - "  URL: http://{{ master_ip }}:31000"
+      - "  No authentication required"
+      - ""
+      - "Grafana:"
+      - "  URL: http://{{ master_ip }}:32000"
+      - "  Username: admin"
+      - "  Password: admin123"
+      - ""
+      - "Pre-configured dashboards:"
+      - "  - Kubernetes / Compute Resources / Cluster"
+      - "  - Kubernetes / Compute Resources / Node"
+      - "  - Node Exporter / Nodes"
+      - ""
+      - "To check pods:"
+      - "  kubectl get pods -n monitoring"
+  tags: [monitoring, info]

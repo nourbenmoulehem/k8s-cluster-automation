@@ -1,0 +1,112 @@
+---
+# ============================================
+# Common role - runs on ALL nodes
+# ============================================
+
+# --------------------------
+# System Configuration
+# --------------------------
+
+- name: Set hostname to inventory name
+  hostname:
+    name: "{{ inventory_hostname }}"
+  tags: [hostname]
+
+- name: Update /etc/hosts with all cluster nodes
+  lineinfile:
+    path: /etc/hosts
+    line: "{{ hostvars[item].ansible_host }} {{ item }}"
+    state: present
+  loop: "{{ groups['all'] }}"
+  tags: [hosts]
+
+# --------------------------
+# Swap Management (K8s requirement!)
+# --------------------------
+
+- name: Check if swap is enabled
+  command: swapon -s
+  register: swap_status
+  changed_when: false
+  tags: [swap]
+
+- name: Disable swap immediately
+  command: swapoff -a
+  when: swap_status.stdout != ""
+  tags: [swap]
+
+- name: Disable swap permanently in /etc/fstab
+  replace:
+    path: /etc/fstab
+    regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
+    replace: '# \1'
+  tags: [swap]
+
+# --------------------------
+# Package Management
+# --------------------------
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  tags: [packages]
+
+- name: Install common packages
+  apt:
+    name: "{{ common_packages }}"
+    state: present
+  tags: [packages]
+
+# --------------------------
+# Kernel Modules (for K8s networking)
+# --------------------------
+
+- name: Load required kernel modules
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - overlay
+    - br_netfilter
+  tags: [kernel]
+
+- name: Ensure kernel modules load on boot
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+  tags: [kernel]
+
+# --------------------------
+# Sysctl Settings (for K8s)
+# --------------------------
+
+- name: Configure sysctl for Kubernetes
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: yes
+  loop:
+    - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+    - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+    - { name: 'net.ipv4.ip_forward', value: '1' }
+  tags: [sysctl]
+
+# --------------------------
+# Verification
+# --------------------------
+
+- name: Verify swap is disabled
+  command: swapon -s
+  register: swap_verify
+  changed_when: false
+  failed_when: swap_verify.stdout != ""
+  tags: [verify]
+
+- name: Display node preparation status
+  debug:
+    msg: "Node {{ inventory_hostname }} is prepared for Kubernetes!"
+  tags: [verify]

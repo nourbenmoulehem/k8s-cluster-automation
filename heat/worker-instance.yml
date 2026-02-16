@@ -1,0 +1,119 @@
+heat_template_version: 2021-04-16
+
+description: Create K8s worker on a compute node
+
+parameters:
+  key_name:
+    type: string
+    description: SSH key name
+    default: mykey
+
+  image:
+    type: string
+    description: image of the instance
+    default: ubuntu-24.04-server
+
+  flavor:
+    type: string
+    description: Flavor for the worker
+    default: ubuntu-small
+
+  selfservice_network:
+    type: string
+    description: existing self-service network name
+    default: selfservice
+
+  provider_network:
+    type: string
+    description: existing provider network
+    default: provider
+
+resources:
+  k8s_secgroup:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: k8s_security_group
+      description: Security group for k8s worker
+      rules:
+        # SSH
+        - protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+          remote_ip_prefix: 0.0.0.0/0
+        
+        # Kubelet API
+        - protocol: tcp
+          port_range_min: 10250
+          port_range_max: 10250
+        
+        # NodePort Services
+        - protocol: tcp
+          port_range_min: 30000
+          port_range_max: 32767
+
+
+        # Allow all from master
+        - remote_ip_prefix: 192.168.1.201/32
+
+        # Allow all from worker2
+        - remote_ip_prefix: 192.168.1.106/32
+
+        # Allow traffic from any instance that's in THIS SAME security group
+        - remote_mode: remote_group_id
+
+  worker1:
+    type: OS::Nova::Server
+    properties:
+      name: worker1
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - network : { get_param: selfservice_network }
+      security_groups:
+        - { get_resource: k8s_secgroup }
+      user_data: |
+          #!/bin/bash
+          echo "ubuntu:ubuntu" | chpasswd
+          sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+          systemctl restart sshd
+
+
+
+  # creating floating ip
+
+  worker_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: provider_network }
+
+  # Associating floating ip to instance
+  worker_ip_association:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: worker_floating_ip }
+      port_id: { get_attr: [worker1, addresses, { get_param: selfservice_network }, 0, port] }
+
+outputs:
+  worker_floating_ip:
+    description: Worker node floating IP
+    value: { get_attr: [worker_floating_ip, floating_ip_address] }
+
+  worker_private_ip:
+    description: Worker node private IP
+    value: { get_attr: [worker1, first_address] }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

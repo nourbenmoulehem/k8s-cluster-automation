@@ -1,0 +1,186 @@
+---
+# ============================================
+# K8s Master Role - Initialize Cluster
+# Runs ONLY on master node
+# ============================================
+
+# --------------------------------------------------
+# SECTION 1: CLUSTER INITIALIZATION
+# --------------------------------------------------
+
+- name: Check if Kubernetes is already initialized
+  stat:
+    path: /etc/kubernetes/admin.conf
+  register: k8s_init_stat
+  tags: [k8s-master, init]
+
+- name: Initialize Kubernetes cluster with kubeadm
+  command: kubeadm init --pod-network-cidr=10.244.0.0/16
+  when: not k8s_init_stat.stat.exists
+  register: kubeadm_init_output
+  tags: [k8s-master, init]
+
+# --------------------------------------------------
+# SECTION 2: KUBECTL ACCESS SETUP
+# --------------------------------------------------
+
+- name: Create .kube directory
+  file:
+    path: /home/{{ ansible_user }}/.kube
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  tags: [k8s-master, config]
+
+- name: Copy admin.conf to user's kube config
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /home/{{ ansible_user }}/.kube/config
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0600'
+    remote_src: yes
+  tags: [k8s-master, config]
+
+# --------------------------------------------------
+# SECTION 3: CNI (CALICO) INSTALLATION
+# --------------------------------------------------
+
+- name: Check if Calico is installed
+  become: no
+  shell: kubectl get daemonset calico-node -n kube-system
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  register: calico_check
+  failed_when: false
+  changed_when: false
+  tags: [k8s-master, cni]
+
+- name: Install Calico network plugin
+  become: no
+  command: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  when: calico_check.rc != 0
+  register: calico_installed
+  tags: [k8s-master, cni]
+
+- name: Check if kubelet has CNI errors
+  shell: journalctl -u kubelet -n 20 --no-pager | grep -q "cni plugin not initialized"
+  register: kubelet_cni_error
+  failed_when: false
+  changed_when: false
+  tags: [k8s-master, cni]
+
+- name: Restart kubelet to detect CNI plugin
+  systemd:
+    name: kubelet
+    state: restarted
+  when: calico_installed.changed or kubelet_cni_error.rc == 0
+  tags: [k8s-master, cni]
+
+- name: Wait for kubelet to initialize with CNI
+  pause:
+    seconds: 15
+  when: calico_installed.changed or kubelet_cni_error.rc == 0
+  tags: [k8s-master, cni]
+  
+# AFTER: Wait for kubelet to initialize with CNI
+
+- name: Check if local-path-provisioner is installed
+  command: kubectl get namespace local-path-storage
+  register: local_path_check
+  failed_when: false
+  changed_when: false
+  become: no
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+
+- name: Install local-path storage provisioner
+  command: kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.24/deploy/local-path-storage.yaml
+  when: local_path_check.rc != 0
+  become: no
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+
+
+# NEW TASK: Remove not-ready taint
+- name: Remove all taints from master
+  become: no
+  shell: |
+    kubectl taint nodes --all node.kubernetes.io/not-ready:NoSchedule- 2>/dev/null || true
+    kubectl taint nodes --all node.kubernetes.io/not-ready:NoExecute- 2>/dev/null || true
+    kubectl taint nodes --all node-role.kubernetes.io/control-plane:NoSchedule- 2>/dev/null || true
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+
+# THEN: Wait for all system pods to be ready
+
+- name: Wait for all system pods to be ready
+  become: no
+  shell: kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=300s
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  retries: 3
+  delay: 10
+  register: pods_ready
+  until: pods_ready.rc == 0
+  ignore_errors: yes
+  tags: [k8s-master, cni]
+
+# --------------------------------------------------
+# SECTION 4: JOIN COMMAND GENERATION
+# --------------------------------------------------
+
+- name: Generate kubeadm join command
+  command: kubeadm token create --print-join-command
+  register: join_command_output
+  tags: [k8s-master, join]
+
+- name: Save join command to project directory
+  become: no
+  local_action:
+    module: copy
+    content: "{{ join_command_output.stdout }}"
+    dest: "{{ playbook_dir }}/k8s-join-command.sh"
+    mode: '0755'
+    force: yes
+  tags: [k8s-master, join]
+
+# --------------------------------------------------
+# SECTION 5: CLUSTER VERIFICATION
+# --------------------------------------------------
+
+- name: Get cluster info
+  become: no
+  command: kubectl cluster-info
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  register: cluster_info
+  changed_when: false
+  tags: [k8s-master, verify]
+
+- name: Get nodes status
+  become: no
+  command: kubectl get nodes
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  register: nodes_status
+  changed_when: false
+  tags: [k8s-master, verify]
+
+- name: Display cluster status
+  debug:
+    msg:
+      - "============================================"
+      - "✓ Cluster initialized successfully!"
+      - "============================================"
+      - ""
+      - "{{ cluster_info.stdout }}"
+      - ""
+      - "Nodes:"
+      - "{{ nodes_status.stdout }}"
+      - ""
+      - "Join command saved to: {{ playbook_dir }}/k8s-join-command.sh"
+  tags: [k8s-master, verify]

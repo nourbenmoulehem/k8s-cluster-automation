@@ -1,0 +1,55 @@
+---
+# ============================================
+# K8s Worker Role - Join Workers to Cluster
+# ============================================
+
+- name: Check if node is already part of cluster
+  stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf_stat
+  tags: [k8s-worker, join]
+
+- name: Copy join command from controller to worker
+  copy:
+    src: /home/controller/paas/k8s-join-command.sh
+    dest: /home/{{ ansible_user }}/k8s-join-command.sh
+    mode: '0755'
+  when: not kubelet_conf_stat.stat.exists
+  tags: [k8s-worker, join]
+
+- name: Join worker to Kubernetes cluster
+  command: bash /home/{{ ansible_user }}/k8s-join-command.sh
+  when: not kubelet_conf_stat.stat.exists
+  register: join_output
+  tags: [k8s-worker, join]
+
+- name: Wait for kubelet to be active
+  systemd:
+    name: kubelet
+    state: started
+    enabled: yes
+  when: not kubelet_conf_stat.stat.exists
+  tags: [k8s-worker, verify]
+
+- name: Display join command output
+  debug:
+    var: join_output.stdout_lines
+  when: join_output is defined and join_output.stdout_lines is defined
+  tags: [k8s-worker, verify]
+
+- name: Verify kubelet is running
+  command: systemctl is-active kubelet
+  register: kubelet_status
+  changed_when: false
+  failed_when: kubelet_status.stdout != "active"
+  tags: [k8s-worker, verify]
+
+- name: Display worker status
+  debug:
+    msg:
+      - "✓ Worker node configuration complete!"
+      - "Kubelet status: {{ kubelet_status.stdout }}"
+      - ""
+      - "Worker has joined the cluster!"
+      - "Check on master: kubectl get nodes"
+  tags: [k8s-worker, verify]

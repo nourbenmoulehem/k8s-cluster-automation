@@ -1,0 +1,6 @@
+---
+- name: Test container runtime
+  hosts: all
+  become: yes
+  roles:
+    - container-runtime

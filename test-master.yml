@@ -1,0 +1,6 @@
+---
+- name: Test k8s master
+  hosts: master
+  become: yes
+  roles:
+    - k8s-master
