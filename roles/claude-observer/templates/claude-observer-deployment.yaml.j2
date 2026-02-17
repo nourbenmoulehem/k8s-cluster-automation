@@ -1,0 +1,91 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: claude-api-key
+  namespace: claude-observer
+type: Opaque
+stringData:
+  api-key: "{{ lookup('file', playbook_dir + '/api-key') | default('') }}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude-observer
+  namespace: claude-observer
+  labels:
+    app: claude-observer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: claude-observer
+  template:
+    metadata:
+      labels:
+        app: claude-observer
+    spec:
+      serviceAccountName: claude-observer
+      containers:
+      - name: observer
+        image: python:3.11-slim
+        command:
+        - /bin/bash
+        - -c
+        - |
+          pip install anthropic kubernetes prometheus-api-client --break-system-packages
+          python /app/claude-observer.py
+        env:
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: claude-api-key
+              key: api-key
+        volumeMounts:
+        - name: app
+          mountPath: /app
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: app
+        configMap:
+          name: claude-observer-app
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: claude-observer
+  namespace: claude-observer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: claude-observer
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes", "events", "services"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: claude-observer
+subjects:
+- kind: ServiceAccount
+  name: claude-observer
+  namespace: claude-observer
+roleRef:
+  kind: ClusterRole
+  name: claude-observer
+  apiGroup: rbac.authorization.k8s.io

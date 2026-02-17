@@ -1,0 +1,6 @@
+---
+- name: Deploy Claude Observer only
+  hosts: k8s_master
+  become: no
+  roles:
+    - claude-observer

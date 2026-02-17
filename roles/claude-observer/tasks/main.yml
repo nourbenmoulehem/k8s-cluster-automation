@@ -4,12 +4,11 @@
 # ============================================
 
 - name: Create claude-observer namespace
-  command: kubectl create namespace claude-observer --dry-run=client -o yaml | kubectl apply -f -
+  command: kubectl create namespace claude-observer
   become: no
   environment:
     KUBECONFIG: /home/{{ ansible_user }}/.kube/config
-  register: namespace_created
-  changed_when: "'created' in namespace_created.stdout or 'configured' in namespace_created.stdout"
+  failed_when: false  # Ignore if already exists
 
 - name: Create temporary directory for Claude Observer manifests
   file:

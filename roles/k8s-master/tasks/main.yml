@@ -66,6 +66,59 @@
   register: calico_installed
   tags: [k8s-master, cni]
 
+- name: Wait for Calico pods to start
+  become: no
+  command: kubectl wait --for=condition=Ready pod -l k8s-app=calico-node -n kube-system --timeout=120s
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  when: calico_installed.changed
+  retries: 3
+  delay: 10
+  register: calico_initial_ready
+  until: calico_initial_ready.rc == 0
+  tags: [k8s-master, cni]
+
+- name: Wait for Calico IP pool to be created
+  become: no
+  shell: kubectl get ippool default-ipv4-ippool 2>/dev/null
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  when: calico_installed.changed
+  retries: 12
+  delay: 5
+  register: ippool_exists
+  until: ippool_exists.rc == 0
+  tags: [k8s-master, cni]
+
+- name: Switch Calico from IPIP to VXLAN for OpenStack compatibility
+  become: no
+  command: kubectl patch ippool default-ipv4-ippool --type merge -p '{"spec":{"ipipMode":"Never","vxlanMode":"Always"}}'
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  when: calico_installed.changed
+  register: calico_vxlan_enabled
+  tags: [k8s-master, cni]
+
+- name: Restart Calico to apply VXLAN mode
+  become: no
+  command: kubectl rollout restart daemonset/calico-node -n kube-system
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  when: calico_vxlan_enabled.changed
+  tags: [k8s-master, cni]
+
+- name: Wait for Calico with VXLAN to be ready
+  become: no
+  command: kubectl rollout status daemonset/calico-node -n kube-system --timeout=120s
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  when: calico_vxlan_enabled.changed
+  retries: 2
+  delay: 10
+  register: calico_vxlan_ready
+  until: calico_vxlan_ready.rc == 0
+  tags: [k8s-master, cni]
+
 - name: Check if kubelet has CNI errors
   shell: journalctl -u kubelet -n 20 --no-pager | grep -q "cni plugin not initialized"
   register: kubelet_cni_error
@@ -73,20 +126,41 @@
   changed_when: false
   tags: [k8s-master, cni]
 
-- name: Restart kubelet to detect CNI plugin
+- name: Restart kubelet if CNI errors exist
   systemd:
     name: kubelet
     state: restarted
-  when: calico_installed.changed or kubelet_cni_error.rc == 0
+  when: kubelet_cni_error.rc == 0
   tags: [k8s-master, cni]
 
-- name: Wait for kubelet to initialize with CNI
+- name: Wait for kubelet to stabilize
   pause:
-    seconds: 15
-  when: calico_installed.changed or kubelet_cni_error.rc == 0
+    seconds: 10
+  when: kubelet_cni_error.rc == 0
   tags: [k8s-master, cni]
-  
-# AFTER: Wait for kubelet to initialize with CNI
+
+# --------------------------------------------------
+# SECTION 3.5: REMOVE TAINTS (BEFORE STORAGE!)
+# --------------------------------------------------
+
+- name: Remove control-plane taint to allow scheduling
+  become: no
+  shell: |
+    kubectl taint nodes --all node-role.kubernetes.io/control-plane:NoSchedule- 2>/dev/null || true
+    kubectl taint nodes --all node.kubernetes.io/not-ready:NoSchedule- 2>/dev/null || true
+    kubectl taint nodes --all node.kubernetes.io/not-ready:NoExecute- 2>/dev/null || true
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  tags: [k8s-master, taint]
+
+- name: Wait for node to be schedulable
+  pause:
+    seconds: 5
+  tags: [k8s-master, taint]
+
+# --------------------------------------------------
+# SECTION 4: STORAGE PROVISIONER (AFTER TAINT REMOVAL!)
+# --------------------------------------------------
 
 - name: Check if local-path-provisioner is installed
   command: kubectl get namespace local-path-storage
@@ -96,6 +170,7 @@
   become: no
   environment:
     KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  tags: [k8s-master, storage]
 
 - name: Install local-path storage provisioner
   command: kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.24/deploy/local-path-storage.yaml
@@ -103,23 +178,46 @@
   become: no
   environment:
     KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  register: local_path_installed
+  tags: [k8s-master, storage]
 
-
-# NEW TASK: Remove not-ready taint
-- name: Remove all taints from master
+- name: Wait for local-path provisioner to be ready
+  command: kubectl wait --for=condition=Ready pod -l app=local-path-provisioner -n local-path-storage --timeout=60s
+  when: local_path_installed.changed
   become: no
-  shell: |
-    kubectl taint nodes --all node.kubernetes.io/not-ready:NoSchedule- 2>/dev/null || true
-    kubectl taint nodes --all node.kubernetes.io/not-ready:NoExecute- 2>/dev/null || true
-    kubectl taint nodes --all node-role.kubernetes.io/control-plane:NoSchedule- 2>/dev/null || true
   environment:
     KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  retries: 2
+  delay: 5
+  register: provisioner_ready
+  until: provisioner_ready.rc == 0
+  ignore_errors: yes
+  tags: [k8s-master, storage]
 
-# THEN: Wait for all system pods to be ready
+- name: Display storage provisioner status
+  debug:
+    msg: "✓ Local-path storage provisioner installed and ready"
+  when: provisioner_ready.rc == 0
+  tags: [k8s-master, storage]
+
+# --------------------------------------------------
+# SECTION 5: WAIT FOR CORE DNS
+# --------------------------------------------------
+
+- name: Wait for CoreDNS to be ready
+  become: no
+  command: kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=120s
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  retries: 2
+  delay: 10
+  register: coredns_ready
+  until: coredns_ready.rc == 0
+  tags: [k8s-master, dns]
 
 - name: Wait for all system pods to be ready
   become: no
-  shell: kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=300s
+  shell: kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=180s
   environment:
     KUBECONFIG: /home/{{ ansible_user }}/.kube/config
   retries: 3
@@ -130,7 +228,7 @@
   tags: [k8s-master, cni]
 
 # --------------------------------------------------
-# SECTION 4: JOIN COMMAND GENERATION
+# SECTION 6: JOIN COMMAND GENERATION
 # --------------------------------------------------
 
 - name: Generate kubeadm join command
@@ -149,7 +247,7 @@
   tags: [k8s-master, join]
 
 # --------------------------------------------------
-# SECTION 5: CLUSTER VERIFICATION
+# SECTION 7: CLUSTER VERIFICATION
 # --------------------------------------------------
 
 - name: Get cluster info
@@ -163,10 +261,19 @@
 
 - name: Get nodes status
   become: no
-  command: kubectl get nodes
+  command: kubectl get nodes -o wide
   environment:
     KUBECONFIG: /home/{{ ansible_user }}/.kube/config
   register: nodes_status
+  changed_when: false
+  tags: [k8s-master, verify]
+
+- name: Get all system pods status
+  become: no
+  command: kubectl get pods -n kube-system -o wide
+  environment:
+    KUBECONFIG: /home/{{ ansible_user }}/.kube/config
+  register: system_pods
   changed_when: false
   tags: [k8s-master, verify]
 
@@ -177,10 +284,16 @@
       - "✓ Cluster initialized successfully!"
       - "============================================"
       - ""
+      - "Cluster Info:"
       - "{{ cluster_info.stdout }}"
       - ""
       - "Nodes:"
       - "{{ nodes_status.stdout }}"
       - ""
-      - "Join command saved to: {{ playbook_dir }}/k8s-join-command.sh"
+      - "System Pods:"
+      - "{{ system_pods.stdout }}"
+      - ""
+      - "Join command: {{ playbook_dir }}/k8s-join-command.sh"
+      - "Master is schedulable (taints removed)"
+      - "Calico using VXLAN for OpenStack compatibility"
   tags: [k8s-master, verify]
