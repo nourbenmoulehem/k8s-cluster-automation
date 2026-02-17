@@ -24,7 +24,7 @@
   become: yes
   roles:
     - k8s-master
-    - claude
+#    - claude
 
 # --------------------------------------------------
 # PLAY 3: Join Worker Nodes
@@ -54,10 +54,10 @@
     - nestie-app
 
 
-- name: Deploy Claude Observer
-  hosts: k8s_master
-  become: yes
-  roles:
-    - claude-observer
-  tags:
-    - claude-observer
+#- name: Deploy Claude Observer
+#  hosts: k8s_master
+#  become: yes
+#  roles:
+#    - claude-observer
+#  tags:
+#    - claude-observer

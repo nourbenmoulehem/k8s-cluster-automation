@@ -20,23 +20,16 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+#if [ -z "$ANTHROPIC_API_KEY" ]; then
+ #   print_error "ANTHROPIC_API_KEY not set!"
 
-if [ -z "$ANTHROPIC_API_KEY" ]; then
-    print_error "ANTHROPIC_API_KEY not set!"
-    echo ""
-    echo "Claude Observer requires an API key to function."
-    echo "Get your key from: https://console.anthropic.com/"
-    echo ""
-    echo "Then export it:"
-    echo "  export ANTHROPIC_API_KEY='sk-ant-...'"
-    echo ""
-    read -p "Continue without Claude Observer? (y/n) " -n 1 -r
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-    export SKIP_CLAUDE_OBSERVER=true
-fi
+
+
+  #  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+  #      exit 1
+  #  fi
+ #   export SKIP_CLAUDE_OBSERVER=true
+#fi
 
 
 # HELPER FUNCTIONS
